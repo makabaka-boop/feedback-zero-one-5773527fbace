@@ -1,0 +1,10 @@
+{
+  "states": ["s", "f"],
+  "initial": "s",
+  "final": ["f"],
+  "transitions": [
+    {"id": "e1", "source": "s", "target": "f", "label": "A", "prob": "2/3"},
+    {"id": "e2", "source": "s", "target": "f", "label": "B", "prob": "2/3"}
+  ],
+  "observations": ["A"]
+}

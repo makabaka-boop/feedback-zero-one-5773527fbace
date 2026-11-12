@@ -1,0 +1,7 @@
+{
+  "states": ["s"],
+  "initial": "s",
+  "final": ["s"],
+  "transitions": [],
+  "observations": []
+}

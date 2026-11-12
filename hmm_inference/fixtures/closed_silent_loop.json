@@ -1,0 +1,9 @@
+{
+  "states": ["s"],
+  "initial": "s",
+  "final": [],
+  "transitions": [
+    {"id": "trap", "source": "s", "target": "s", "label": null, "prob": "1/1"}
+  ],
+  "observations": ["A"]
+}
