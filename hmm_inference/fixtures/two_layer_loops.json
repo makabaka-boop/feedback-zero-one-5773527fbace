@@ -1,0 +1,12 @@
+{
+  "states": ["s", "u", "f"],
+  "initial": "s",
+  "final": ["f"],
+  "transitions": [
+    {"id": "loops", "source": "s", "target": "s", "label": null, "prob": "1/2"},
+    {"id": "eA", "source": "s", "target": "u", "label": "A", "prob": "1/2"},
+    {"id": "loopu", "source": "u", "target": "u", "label": null, "prob": "1/2"},
+    {"id": "eB", "source": "u", "target": "f", "label": "B", "prob": "1/2"}
+  ],
+  "observations": ["A", "B"]
+}
