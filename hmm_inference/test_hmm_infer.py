@@ -361,6 +361,44 @@ class HandComputedTests(unittest.TestCase):
         self.assertEqual(r.best_path,
                          {"transition_ids": ["a1", "a2"], "weight": "2/3"})
 
+    # 18. Two-state silent cycle (not a self-loop), empty observations.
+    #     s --a 1/2 null--> t ; s --b 1/4 null--> f
+    #     t --c 1/2 null--> s ; t --d 1/2 null--> f ; obs [].
+    #     A round trip s->t->s has probability (1/2)(1/2) = 1/4, so the
+    #     expected number of visits is geometric:
+    #       V_s = sum_{k>=0} (1/4)^k = 4/3 ; V_t = V_s * 1/2 = 2/3.
+    #     Success probabilities: h_f = 1,
+    #       h_t = 1/2 + (1/2) h_s, h_s = 1/4 + (1/2) h_t  =>  h_s = 2/3,
+    #       h_t = 5/6, hence L = h_s = 2/3.
+    #     Success-weighted counts (visits x prob x suffix):
+    #       a: (4/3)(1/2)(5/6) = 5/9 ; b: (4/3)(1/4)(1) = 1/3
+    #       c: (2/3)(1/2)(2/3) = 2/9 ; d: (2/3)(1/2)(1) = 1/3
+    #     Conditional on success (divide by L = 2/3):
+    #       a 5/6, b 1/2, c 1/3, d 1/2.
+    #     Best path: [b] and [a, d] both weigh 1/4; fewer edges wins -> [b].
+    def test_two_state_silent_cycle(self):
+        r = solve("two_state_loop.json")
+        self.assertEqual(r.status, "success")
+        self.assertEqual(r.likelihood, F("2/3"))
+        self.assertVisits(r, {"a": "5/6", "b": "1/2", "c": "1/3", "d": "1/2"})
+        self.assertEqual(r.best_path,
+                         {"transition_ids": ["b"], "weight": "1/4"})
+
+    # 19. The same two-state cycle behind a deterministic labeled edge.
+    #     pre: s0 --1/1 A--> s, then the cycle of case 18; obs [A].
+    #     The prefix multiplies every path weight by 1, so L = 2/3 and the
+    #     tail expectations are exactly those of case 18; E[pre] = 1.
+    #     Best path [pre, b] weight 1/4 ([pre, a, d] ties the weight but is
+    #     one edge longer).
+    def test_two_state_silent_cycle_after_label(self):
+        r = solve("two_state_loop_prefixed.json")
+        self.assertEqual(r.status, "success")
+        self.assertEqual(r.likelihood, F("2/3"))
+        self.assertVisits(r, {"pre": "1/1", "a": "5/6", "b": "1/2",
+                              "c": "1/3", "d": "1/2"})
+        self.assertEqual(r.best_path,
+                         {"transition_ids": ["pre", "b"], "weight": "1/4"})
+
 
 class ValidationTests(unittest.TestCase):
     def _reject(self, name, path):
@@ -465,6 +503,28 @@ class CliTests(unittest.TestCase):
         err = json.loads(proc.stderr)
         self.assertEqual(err["path"], "$.transitions[0].target")
         self.assertEqual(proc.stdout, "")
+
+    def test_cli_rejection_preserves_existing_output(self):
+        # An illegal input rejects the whole run: the output file must keep
+        # its previous contents (only a fully successful run replaces it).
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "hmm_infer.py")
+        inp = os.path.join(FIX, "bad_prob_range.json")
+        out = os.path.join(FIX, "_tmp_output.json")
+        sentinel = {"kept": "previous successful run"}
+        try:
+            with open(out, "w", encoding="utf-8") as fh:
+                json.dump(sentinel, fh)
+            proc = subprocess.run(
+                [sys.executable, "-I", script, inp, "-o", out],
+                capture_output=True, text=True, check=False)
+            self.assertEqual(proc.returncode, 2)
+            self.assertEqual(proc.stdout, "")
+            with open(out, encoding="utf-8") as fh:
+                self.assertEqual(json.load(fh), sentinel)
+        finally:
+            if os.path.exists(out):
+                os.remove(out)
 
 
 if __name__ == "__main__":

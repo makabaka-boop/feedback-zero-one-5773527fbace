@@ -223,6 +223,33 @@ def hand_crafted_cyclic_cases():
         ],
         "observations": ["A"],
     }
+    # 6. Two-state silent cycle with failure mass, empty observations.
+    yield {
+        "states": ["s", "t", "f"],
+        "initial": "s",
+        "final": ["f"],
+        "transitions": [
+            {"id": "a", "source": "s", "target": "t", "label": None, "prob": "1/2"},
+            {"id": "b", "source": "s", "target": "f", "label": None, "prob": "1/4"},
+            {"id": "c", "source": "t", "target": "s", "label": None, "prob": "1/2"},
+            {"id": "d", "source": "t", "target": "f", "label": None, "prob": "1/2"},
+        ],
+        "observations": [],
+    }
+    # 7. The same cycle behind a deterministic labeled edge.
+    yield {
+        "states": ["s0", "s", "t", "f"],
+        "initial": "s0",
+        "final": ["f"],
+        "transitions": [
+            {"id": "pre", "source": "s0", "target": "s", "label": "A", "prob": "1/1"},
+            {"id": "a", "source": "s", "target": "t", "label": None, "prob": "1/2"},
+            {"id": "b", "source": "s", "target": "f", "label": None, "prob": "1/4"},
+            {"id": "c", "source": "t", "target": "s", "label": None, "prob": "1/2"},
+            {"id": "d", "source": "t", "target": "f", "label": None, "prob": "1/2"},
+        ],
+        "observations": ["A"],
+    }
 
 
 def main():

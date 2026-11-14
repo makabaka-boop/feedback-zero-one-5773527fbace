@@ -303,67 +303,166 @@ def _fmt(value: Fraction) -> str:
 
 
 def infer(model: Model) -> InferenceResult:
+    """Exact successful-path inference for one parsed model.
+
+    Silent moves inside one observation layer follow the substochastic
+    matrix Q.  On the good region (states that can still reach a terminal
+    state or a positive-probability labeled edge through positive silent
+    edges) I - Q is invertible and its inverse is exactly the geometric
+    series I + Q + Q^2 + ... over silent walks, so loops of any shape are
+    summed without truncation or float approximation.  Backward suffix
+    weights f and forward prefix masses a/ap then give the likelihood and
+    the success-weighted traversal count of every transition; failure,
+    wrong-label and non-terminating mass never enters these quantities.
+    """
     n = len(model.observations)
 
-    # Silent (null) transition matrix Q.
-    q = {u: {v: ZERO for v in model.states} for u in model.states}
-    null_edges: list[Edge] = []
-    labeled_edges: list[Edge] = []
-    for edge in model.edges:
-        if edge.label is None:
-            q[edge.source][edge.target] += edge.prob
-            null_edges.append(edge)
-        else:
-            labeled_edges.append(edge)
+    null_edges = [edge for edge in model.edges if edge.label is None]
+    labeled_edges = [edge for edge in model.edges if edge.label is not None]
 
-    # Group visible edges for the existing best-path calculation.
-    by_obs: dict[str, list[Edge]] = {}
+    # ---- good region -------------------------------------------------------
+    # Roots can leave the silent world directly: terminal states and sources
+    # of positive-probability labeled edges.  A state is good iff a
+    # positive-probability silent path leads from it to a root.  Walks that
+    # enter a bad state never emit and never terminate, so their mass is
+    # unsuccessful and is excluded from every quantity below (never
+    # redistributed onto successful paths).
+    roots = set(model.final)
     for edge in labeled_edges:
-        by_obs.setdefault(edge.label, []).append(edge)
+        if edge.prob > ZERO:
+            roots.add(edge.source)
+    silent_into: dict[str, list[str]] = {st: [] for st in model.states}
+    for edge in null_edges:
+        if edge.prob > ZERO:
+            silent_into[edge.target].append(edge.source)
+    good = set(roots)
+    stack = list(roots)
+    while stack:
+        target = stack.pop()
+        for source in silent_into[target]:
+            if source not in good:
+                good.add(source)
+                stack.append(source)
 
-    # Enumerate successful branches in the observation-expanded graph.
-    # Each branch carries its own visited nodes and traversal counts.
-    likelihood = ZERO
-    weighted_counts = {edge.id: ZERO for edge in model.edges}
-    start = (model.initial, 0)
-    pending = [(model.initial, 0, ONE, frozenset({start}), {})]
-    while pending:
-        state, consumed, weight, visited, counts = pending.pop()
-        if state in model.final:
-            if consumed == n:
-                likelihood += weight
-                for eid, count in counts.items():
-                    weighted_counts[eid] += weight * count
-            continue
-        for edge in model.out[state]:
+    good_states = [st for st in model.states if st in good]
+    index = {st: i for i, st in enumerate(good_states)}
+    m = len(good_states)
+
+    # ---- exact inverse of I - Q on the good region -------------------------
+    # Every good state reaches a root through positive silent edges, and
+    # every root is leaky (terminal, or its silent mass is < 1), so Q is
+    # transient on the good region and I - Q is invertible there.
+    if m:
+        mat = [[ZERO] * m for _ in range(m)]
+        for i in range(m):
+            mat[i][i] = ONE
+        for edge in null_edges:
             if edge.prob == ZERO:
                 continue
-            next_consumed = consumed
-            if edge.label is not None:
-                if consumed == n or edge.label != model.observations[consumed]:
-                    continue
-                next_consumed += 1
-            node = (edge.target, next_consumed)
-            if node in visited:
-                continue
-            next_counts = counts.copy()
-            next_counts[edge.id] = next_counts.get(edge.id, 0) + 1
-            pending.append((edge.target, next_consumed, weight * edge.prob,
-                            visited | {node}, next_counts))
+            src = index.get(edge.source)
+            tgt = index.get(edge.target)
+            if src is not None and tgt is not None:
+                mat[src][tgt] -= edge.prob
+        identity = [[ONE if i == j else ZERO for i in range(m)]
+                    for j in range(m)]
+        inv_cols = rref_solve(mat, identity)
+        minv = [[inv_cols[j][i] for j in range(m)] for i in range(m)]
+    else:
+        minv = []
 
+    def row_closure(vec: list[Fraction]) -> list[Fraction]:
+        """``vec @ (I - Q)^-1``: mass after any number of silent steps."""
+        return [sum((vec[i] * minv[i][j] for i in range(m)), ZERO)
+                for j in range(m)]
+
+    def col_closure(vec: list[Fraction]) -> list[Fraction]:
+        """``(I - Q)^-1 @ vec``: suffix weight after any silent prefix."""
+        return [sum((minv[i][j] * vec[j] for j in range(m)), ZERO)
+                for i in range(m)]
+
+    # ---- backward: f[k][u] = total weight of successful suffixes -----------
+    # Base layer: with no observations left, succeed by silently reaching a
+    # terminal state; this covers empty observations and the silent tail
+    # after the last label.
+    f = [[ZERO] * m for _ in range(n + 1)]
+    terminal = [ONE if st in model.final else ZERO for st in good_states]
+    f[n] = col_closure(terminal)
+    for k in range(n - 1, -1, -1):
+        emit = [ZERO] * m
+        for edge in labeled_edges:
+            if edge.prob == ZERO or edge.label != model.observations[k]:
+                continue
+            src = index.get(edge.source)
+            if src is None:
+                continue
+            tgt = index.get(edge.target)
+            suffix = f[k + 1][tgt] if tgt is not None else ZERO
+            emit[src] += edge.prob * suffix
+        f[k] = col_closure(emit)
+
+    init = index.get(model.initial)
+    likelihood = f[0][init] if init is not None else ZERO
     if likelihood == ZERO:
         return InferenceResult(ZERO, "impossible")
-    expected = {eid: total / likelihood
-                for eid, total in weighted_counts.items()}
-    # The best-path helper computes its own closure; it does not use f.
-    best = _best_path(model, null_edges, q, model.states, by_obs, [])
+
+    # ---- forward: a[k] = mass arriving through the k-th labeled edge -------
+    a = [[ZERO] * m for _ in range(n + 1)]
+    a[0][init] = ONE
+    ap: list[list[Fraction]] = []
+    for k in range(n + 1):
+        ap.append(row_closure(a[k]))
+        if k == n:
+            break
+        nxt = [ZERO] * m
+        for edge in labeled_edges:
+            if edge.prob == ZERO or edge.label != model.observations[k]:
+                continue
+            src = index.get(edge.source)
+            tgt = index.get(edge.target)
+            if src is None or tgt is None:
+                continue  # mass entering the bad region never succeeds
+            nxt[tgt] += ap[k][src] * edge.prob
+        a[k + 1] = nxt
+
+    # Exact consistency: forward terminal mass equals the backward likelihood.
+    terminal_mass = sum((ap[n][i] for i, st in enumerate(good_states)
+                         if st in model.final), ZERO)
+    assert terminal_mass == likelihood, (terminal_mass, likelihood)
+
+    # ---- success-weighted traversal counts ---------------------------------
+    # ap[k][u] is the expected number of visits to u on layer k (with
+    # multiplicity), so ap[k][u] * p * f[.][v] sums path weight x traversal
+    # count for edge e = (u -> v, p); repeated traversals are counted every
+    # time, not collapsed into an at-least-once probability.
+    weighted = {edge.id: ZERO for edge in model.edges}
+    for edge in model.edges:
+        if edge.prob == ZERO:
+            continue
+        src = index.get(edge.source)
+        if src is None:
+            continue
+        tgt = index.get(edge.target)
+        total = ZERO
+        if edge.label is None:
+            if tgt is None:
+                continue
+            for k in range(n + 1):
+                total += ap[k][src] * edge.prob * f[k][tgt]
+        else:
+            for k in range(n):
+                if model.observations[k] != edge.label:
+                    continue
+                suffix = f[k + 1][tgt] if tgt is not None else ZERO
+                total += ap[k][src] * edge.prob * suffix
+        weighted[edge.id] = total
+    expected = {eid: total / likelihood for eid, total in weighted.items()}
+
+    best = _best_path(model, null_edges, labeled_edges)
     return InferenceResult(likelihood, "success", expected, best)
 
 
 def _best_path(model: Model, null_edges: list[Edge],
-               q: dict[str, dict[str, Fraction]], region: list[str],
-               by_obs: dict[str, list[Edge]],
-               f: list[dict[str, Fraction]]) -> dict[str, Any]:
+               labeled_edges: list[Edge]) -> dict[str, Any]:
     """Maximum-weight successful path with the required tie breaks.
 
     Candidate order: (weight desc, edge count asc, id sequence ASCII asc).
@@ -372,6 +471,9 @@ def _best_path(model: Model, null_edges: list[Edge],
     probability is <= 1 (a unit-probability cycle only adds edges).
     """
     states = model.states
+    by_obs: dict[str, list[Edge]] = {}
+    for edge in labeled_edges:
+        by_obs.setdefault(edge.label, []).append(edge)
 
     def better(cand, cur):
         if cur is None:
@@ -390,6 +492,8 @@ def _best_path(model: Model, null_edges: list[Edge],
         closure[u][u] = (ONE, ())
     # Parallel silent edges: keep the best one directly.
     for edge in null_edges:
+        if edge.prob == ZERO:
+            continue
         cand = (edge.prob, (edge.id,))
         if better(cand, closure[edge.source][edge.target]):
             closure[edge.source][edge.target] = cand

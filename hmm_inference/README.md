@@ -15,7 +15,7 @@
 
 ```
 hmm_infer.py                    入口与全部实现（校验 + 推断 + 最优路径）
-test_hmm_infer.py               31 个手算验收单元测试（含 CLI 测试）
+test_hmm_infer.py               34 个手算验收单元测试（含 CLI 测试）
 test_bruteforce_crosscheck.py   独立暴力枚举交叉验证（随机 + 手工环模型）
 fixtures/                       手算用例的输入 JSON
 ```
@@ -150,6 +150,8 @@ python3 -I test_bruteforce_crosscheck.py
 | 用例 | 手算结果 |
 | --- | --- |
 | `canonical_loop` 1/2 静默自环 + 1/2 标签 A 出口，obs [A] | L=1；loop、exitA 条件期望各 1；最优 [exitA] 权重 1/2 |
+| `two_state_loop` 两状态静默环 a/b/c/d（1/2、1/4、1/2、1/2），obs [] | L=2/3；a、b、c、d 期望 5/6、1/2、1/3、1/2；最优 [b] 权重 1/4 |
+| `two_state_loop_prefixed` 前置确定 A 边后接同一两状态环，obs [A] | L=2/3；pre 期望 1，尾段期望与上行相同；最优 [pre,b] 权重 1/4 |
 | `closed_silent_loop` 概率 1 的封闭静默环 | `impossible`，不终止质量不分摊 |
 | `empty_obs` 静默环 2/3 + 静默出口 1/3，obs [] | L=1；环期望 2、出口期望 1；最优 [go] 权重 1/3 |
 | `zero_prob_edge` 0/1 边与 1/2 边平行 | L=1/2；零边期望保留为 0/1 |
